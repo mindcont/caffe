@@ -6,6 +6,10 @@
 // The MNIST dataset could be downloaded at
 //    http://yann.lecun.com/exdb/mnist/
 
+// 本程序将 MNIST 数据集转换为（默认）lmdb 或leveldb (--backend=leveldb) 格式 便于caffe 载入数据
+// 命令行参数说明：
+//        convert_mnist_data [FLAGS] 载入图片文件，输入标签文件，输出db 文件
+
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <google/protobuf/text_format.h>
@@ -35,6 +39,7 @@ using std::string;
 
 DEFINE_string(backend, "lmdb", "The backend for storing the result");
 
+// 大小端转换。MNIST 原始数据文件中 32位整型值 为 大端存储。 c / c++ 变量位小端 存储，因此需要加入转换机制
 uint32_t swap_endian(uint32_t val) {
     val = ((val << 8) & 0xFF00FF00) | ((val >> 8) & 0xFF00FF);
     return (val << 16) | (val >> 16);
@@ -43,19 +48,24 @@ uint32_t swap_endian(uint32_t val) {
 void convert_dataset(const char* image_filename, const char* label_filename,
         const char* db_path, const string& db_backend) {
   // Open files
+  // 用 c++ 输入文件流以二进制方式打开文件
   std::ifstream image_file(image_filename, std::ios::in | std::ios::binary);
   std::ifstream label_file(label_filename, std::ios::in | std::ios::binary);
   CHECK(image_file) << "Unable to open file " << image_filename;
   CHECK(label_file) << "Unable to open file " << label_filename;
   // Read the magic and the meta data
+  // 读取魔数和基本信息
   uint32_t magic;
   uint32_t num_items;
   uint32_t num_labels;
   uint32_t rows;
   uint32_t cols;
 
+  // 读取魔数 （4 Bytes）
   image_file.read(reinterpret_cast<char*>(&magic), 4);
+  // 大小端转换
   magic = swap_endian(magic);
+  // 校验魔数 是否为2051，不是则报错
   CHECK_EQ(magic, 2051) << "Incorrect image file magic.";
   label_file.read(reinterpret_cast<char*>(&magic), 4);
   magic = swap_endian(magic);
@@ -76,6 +86,7 @@ void convert_dataset(const char* image_filename, const char* label_filename,
   scoped_ptr<db::Transaction> txn(db->NewTransaction());
 
   // Storing to db
+  // 将读取数据保存 db
   char label;
   char* pixels = new char[rows * cols];
   int count = 0;

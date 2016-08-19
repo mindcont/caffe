@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
 # This scripts downloads the mnist data and unzips it.
+# 该脚本用于下载 MINST 数据集并解压
 
 DIR="$( cd "$(dirname "$0")" ; pwd -P )"
 cd "$DIR"
