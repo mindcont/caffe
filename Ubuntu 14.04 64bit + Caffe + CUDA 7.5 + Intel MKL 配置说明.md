@@ -1,5 +1,8 @@
 # Ubuntu 14.04 64bit + Caffe + CUDA 7.5 + Intel MKL 配置说明
 
+張正軒 (bond@mindcont.com)  
+更多访问  http://blog.mindcont.com
+
 本步骤经笔者亲身实践，集百家所长，能实现Caffe在NVIDIA GPU下进行计算。
 
 ## 1. 安装开发所需的依赖包
@@ -18,7 +21,7 @@ sudo apt-get install libprotobuf-dev libleveldb-dev libsnappy-dev libopencv-dev 
 
 1. 首先在BIOS设置里选择用Intel显卡来显示或作为主要显示设备
 2. 进入Ubuntu， 按 ctrl+alt+F1 进入tty， 登录tty后输入如下命令
-  
+
    ```sh
    sudo service lightdm stop
    ```
@@ -57,7 +60,7 @@ sudo ln -s libcudnn.so.5.1.3 libcudnn.so
 ```
 
 ### 2.4 设置环境变量
-安装完成后需要在`/etc/profile`中添加环境变量, 
+安装完成后需要在`/etc/profile`中添加环境变量,
 ```sh
 sudo gedit /etc/profile
 ```
@@ -81,7 +84,7 @@ source /etc/profile
 sudo ldconfig
 ```
 
-## 3. 测试CUDA 
+## 3. 测试CUDA
 进入`/usr/local/cuda/samples`, 执行下列命令来build samples
 ```sh
 sudo make all -j4
@@ -174,7 +177,7 @@ sudo apt-get install protobuf-c-compiler protobuf-compiler
 ```
 
 ## 7.0 安装MATLAB
-Caffe提供了MATLAB接口，有需要用MATLAB的同学可以额外安装MATLAB。安装教程同Windows 下类似,首先下载 MATLAB for Linux、解压。 
+Caffe提供了MATLAB接口，有需要用MATLAB的同学可以额外安装MATLAB。安装教程同Windows 下类似,首先下载 MATLAB for Linux、解压。
 ```sh
 sudo sh ./install.sh
 ```
@@ -210,7 +213,7 @@ cp Makefile.config.example Makefile.config
 * BLAS (使用intel mkl还是atlas)
 * MATLAB_DIR 如果需要使用MATLAB wrapper的同学需要指定matlab的安装路径, 如我的路径为 `/usr/local/MATLAB/R2015b` (注意该目录下需要包含bin文件夹，bin文件夹里应该包含mex二进制程序)
 * DEBUG 是否使用debug模式，打开此选项则可以在eclipse或者NSight中debug程序
-* CUDA_ARCH 可根据你自己显卡对应的计算力[](https://developer.nvidia.com/cuda-gpus)改相应的 -gencode arch=compute_xx,code=compute_xx 。例如我的显卡是 NVIDIA K2200 对应的计算力是 5.0，所以我相应的设置为 -gencode arch=compute_50,code=compute_50 
+* CUDA_ARCH 可根据你自己显卡对应的计算力[](https://developer.nvidia.com/cuda-gpus)改相应的 -gencode arch=compute_xx,code=compute_xx 。例如我的显卡是 NVIDIA K2200 对应的计算力是 5.0，所以我相应的设置为 -gencode arch=compute_50,code=compute_50
 
 这里是我的配置：
 
@@ -250,7 +253,7 @@ cp Makefile.config.example Makefile.config
 # CUDA architecture setting: going with all of them.
 # For CUDA < 6.0, comment the *_50 lines for compatibility.
  CUDA_ARCH := -gencode arch=compute_50,code=sm_50 \
-		-gencode arch=compute_50,code=compute_50 
+		-gencode arch=compute_50,code=compute_50
 
 # BLAS choice:
 # atlas for ATLAS (default)
@@ -343,11 +346,37 @@ make matcaffe
 
 ### 8.3 编译Python wrapper
 ```sh
- make pycaffe 
+ make pycaffe
 ```
-然后基本就全部安装完拉.
+**注意：** 这里生成caffe 的 python 还不能够直接使用，建议输入下面的指令，将其加入到当前用户的用户变量中。
+```
+cd ~
+gedit .bashrc
+```
+在打开的文件中，输入
+```
+export PYTHONPATH=/home/pi/caffe/python:$PYTHONPATH
+```
+保存后关闭，然后在命令行输入
+```
+source .bashrc
+```
+打开一个新的终端或同时按住（Ctrl + Alt + T）,输入
+```
+python
+import caffe
+```
+如果看到如下内容
+```
+pi@DeepMind:~$ python
+Python 2.7.6 (default, Jun 22 2015, 17:58:13)
+[GCC 4.8.2] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> import caffe
+>>>
 
-接下来大家尽情地跑demo吧～
+```
+然后基本就全部安装完拉. 接下来大家尽情地跑demo吧～
 
 ## 9. 参考链接
 
