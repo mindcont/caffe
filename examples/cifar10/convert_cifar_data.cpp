@@ -5,6 +5,11 @@
 //    convert_cifar_data input_folder output_db_file
 // The CIFAR dataset could be downloaded at
 //    http://www.cs.toronto.edu/~kriz/cifar.html
+// 该程序将 cifar 数据集转换为 caffe 需要的格式
+// 用法 ：
+//    convert_cifar_data input_folder output_db_file
+// cifar 数据集从这里下载
+//    http://www.cs.toronto.edu/~kriz/cifar.html
 
 #include <fstream>  // NOLINT(readability/streams)
 #include <string>
@@ -23,11 +28,13 @@ using boost::scoped_ptr;
 using std::string;
 namespace db = caffe::db;
 
+// cifar 数据集图像尺寸 32*32
 const int kCIFARSize = 32;
 const int kCIFARImageNBytes = 3072;
 const int kCIFARBatchSize = 10000;
 const int kCIFARTrainBatches = 5;
 
+// 从文件file 读取图像数据 到 buffer 和 label 缓冲区
 void read_image(std::ifstream* file, int* label, char* buffer) {
   char label_char;
   file->read(&label_char, 1);
@@ -36,6 +43,7 @@ void read_image(std::ifstream* file, int* label, char* buffer) {
   return;
 }
 
+// 转换图像格式核心代码
 void convert_dataset(const string& input_folder, const string& output_folder,
     const string& db_type) {
   scoped_ptr<db::DB> train_db(db::GetDB(db_type));

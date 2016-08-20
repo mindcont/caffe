@@ -177,6 +177,7 @@ caffe::SolverAction::Enum GetRequestedAction(
 }
 
 // Train / Finetune a model.
+// 训练/微调一个模型
 int train() {
   CHECK_GT(FLAGS_solver.size(), 0) << "Need a solver definition to train.";
   CHECK(!FLAGS_snapshot.size() || !FLAGS_weights.size())
@@ -258,6 +259,7 @@ RegisterBrewFunction(train);
 
 
 // Test: score a model.
+// 预测：使用模型打分
 int test() {
   CHECK_GT(FLAGS_model.size(), 0) << "Need a model definition to score.";
   CHECK_GT(FLAGS_weights.size(), 0) << "Need model weights to score.";
@@ -331,6 +333,7 @@ RegisterBrewFunction(test);
 
 
 // Time: benchmark the execution time of a model.
+// 计时： 评测模型执行时间
 int time() {
   CHECK_GT(FLAGS_model.size(), 0) << "Need a model definition to time.";
   caffe::Phase phase = get_phase_from_flags(caffe::TRAIN);

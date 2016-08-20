@@ -19,19 +19,23 @@ using caffe::Net;
 using std::string;
 namespace db = caffe::db;
 
+// 提前声明处理函数
 template<typename Dtype>
 int feature_extraction_pipeline(int argc, char** argv);
 
 int main(int argc, char** argv) {
+
+  // 将控制权交给处理函数
   return feature_extraction_pipeline<float>(argc, argv);
 //  return feature_extraction_pipeline<double>(argc, argv);
 }
 
+// 处理器实现
 template<typename Dtype>
 int feature_extraction_pipeline(int argc, char** argv) {
-  ::google::InitGoogleLogging(argv[0]);
+  ::google::InitGoogleLogging(argv[0]); //初始化日志系统
   const int num_required_args = 7;
-  if (argc < num_required_args) {
+  if (argc < num_required_args) {     //判断命令行参数个数，小于 7个 则报错
     LOG(ERROR)<<
     "This program takes in a trained network and an input data layer, and then"
     " extract features of the input data produced by the net.\n"
