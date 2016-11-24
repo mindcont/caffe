@@ -18,6 +18,7 @@ using std::max;
 using std::pair;
 using boost::scoped_ptr;
 
+// 命令行指定 使用 lmdb 和 leveldb 作为输入图像源
 DEFINE_string(backend, "lmdb",
         "The backend {leveldb, lmdb} containing the images");
 
@@ -29,11 +30,13 @@ int main(int argc, char** argv) {
   namespace gflags = google;
 #endif
 
+  // 设置 gflags 命令行提示信息
   gflags::SetUsageMessage("Compute the mean_image of a set of images given by"
         " a leveldb/lmdb\n"
         "Usage:\n"
         "    compute_image_mean [FLAGS] INPUT_DB [OUTPUT_FILE]\n");
 
+  // 解析命令行参数
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   if (argc < 2 || argc > 3) {
@@ -41,11 +44,12 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // 获得输入数据的db类型，并创建对象
   scoped_ptr<db::DB> db(db::GetDB(FLAGS_backend));
   db->Open(argv[1], db::READ);
   scoped_ptr<db::Cursor> cursor(db->NewCursor());
 
-  BlobProto sum_blob;
+  BlobProto sum_blob; //求和、取平均就靠他了
   int count = 0;
   // load first datum
   Datum datum;

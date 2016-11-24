@@ -3,23 +3,39 @@ net: "examples/mnist/lenet_train_test.prototxt"
 # test_iter specifies how many forward passes the test should carry out.
 # In the case of MNIST, we have test batch size 100 and 100 test iterations,
 # covering the full 10,000 testing images.
+# 预测阶段迭代次数。 在mnist 数据集下，预测样本组 （test batch）为 100
+# 这里设置预测阶段迭代次数为100 可以覆盖全部10000 个测试集
 test_iter: 100
+
 # Carry out testing every 500 training iterations.
+# 训练时每迭代500次，进行一次预测
 test_interval: 500
+
 # The base learning rate, momentum and the weight decay of the network.
+# 网络的基础学习速率 冲量 和权衰量
 base_lr: 0.01
 momentum: 0.9
 weight_decay: 0.0005
+
 # The learning rate policy
+# 学习速率的衰减策略
 lr_policy: "inv"
 gamma: 0.0001
 power: 0.75
+
 # Display every 100 iterations
+# 每迭代100 次，在屏幕打印一次运行log
 display: 100
+
 # The maximum number of iterations
+# 最大迭代次数
 max_iter: 10000
+
 # snapshot intermediate results
+# 每5000 次迭代打印一次快照，用于训练意外中断时的恢复 和 保存 训练过程信息
 snapshot: 5000
 snapshot_prefix: "examples/mnist/lenet"
+
 # solver mode: CPU or GPU
+# caffe 求解器 采用 GPU
 solver_mode: GPU
