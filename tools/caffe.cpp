@@ -198,6 +198,7 @@ caffe::SolverAction::Enum GetRequestedAction(
     return caffe::SolverAction::NONE;
   }
   LOG(FATAL) << "Invalid signal effect \""<< flag_value << "\" was specified";
+  return caffe::SolverAction::NONE;
 }
 
 // Train / Finetune a model.
@@ -219,6 +220,7 @@ int train() {
   // If the gpus flag is not provided, allow the mode and device to be set
   // in the solver prototxt.
   if (FLAGS_gpu.size() == 0
+      && solver_param.has_solver_mode()
       && solver_param.solver_mode() == caffe::SolverParameter_SolverMode_GPU) {
       if (solver_param.has_device_id()) {
           FLAGS_gpu = "" +
@@ -267,15 +269,17 @@ int train() {
     CopyLayers(solver.get(), FLAGS_weights);
   }
 
+  LOG(INFO) << "Starting Optimization";
   if (gpus.size() > 1) {
-    caffe::P2PSync<float> sync(solver, NULL, solver->param());
-    std::vector<device*> devices;
-    for (int_tp i = 0; i < gpus.size(); ++i) {
-      devices.push_back(Caffe::Get().GetDevice(i, true));
-    }
-    sync.Run(devices);
+#ifdef USE_CUDA
+#ifdef USE_NCCL
+    caffe::NCCL<float> nccl(solver);
+    nccl.Run(gpus, FLAGS_snapshot.size() > 0 ? FLAGS_snapshot.c_str() : NULL);
+#else
+    LOG(FATAL) << "Multi-GPU execution not available - rebuild with USE_NCCL";
+#endif  // USE_NCCL
+#endif  // USE_CUDA
   } else {
-    LOG(INFO) << "Starting Optimization";
     solver->Solve();
   }
   LOG(INFO) << "Optimization Done.";
@@ -405,8 +409,10 @@ int time() {
   float initial_loss;
   caffe_net.Forward(&initial_loss);
   LOG(INFO) << "Initial loss: " << initial_loss;
-  LOG(INFO) << "Performing Backward";
-  caffe_net.Backward();
+  if (phase == caffe::TRAIN) {
+    LOG(INFO) << "Performing Backward";
+    caffe_net.Backward();
+  }
 
   const vector<shared_ptr<Layer<float> > >& layers = caffe_net.layers();
   const vector<vector<Blob<float>*> >& bottom_vecs = caffe_net.bottom_vecs();
@@ -435,15 +441,17 @@ int time() {
       forward_time_per_layer[i] += timer.MicroSeconds();
     }
     forward_time += forward_timer.MicroSeconds();
-    backward_timer.Start();
-    for (int_tp i = layers.size() - 1; i >= 0; --i) {
-      timer.Start();
-      layers[i]->Backward(top_vecs[i], bottom_need_backward[i],
-                          bottom_vecs[i]);
-      Caffe::Synchronize(Caffe::GetDefaultDevice()->id());
-      backward_time_per_layer[i] += timer.MicroSeconds();
+    if (phase == caffe::TRAIN) {
+      backward_timer.Start();
+      for (int_tp i = layers.size() - 1; i >= 0; --i) {
+        timer.Start();
+        layers[i]->Backward(top_vecs[i], bottom_need_backward[i],
+                            bottom_vecs[i]);
+        Caffe::Synchronize(Caffe::GetDefaultDevice()->id());
+        backward_time_per_layer[i] += timer.MicroSeconds();
+      }
+      backward_time += backward_timer.MicroSeconds();
     }
-    backward_time += backward_timer.MicroSeconds();
     LOG(INFO) << "Iteration: " << j + 1 << " forward-backward time: "
       << iter_timer.MilliSeconds() << " ms.";
   }

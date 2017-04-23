@@ -1,3 +1,8 @@
+#if defined(_MSC_VER)
+#include <process.h>
+#define getpid() _getpid()
+#endif
+
 #include <boost/thread.hpp>
 #include <glog/logging.h>
 
@@ -23,6 +28,60 @@
 #endif  // USE_GREENTEA
 
 namespace caffe {
+
+
+size_t dtsizeof(DataType data_type) {
+  switch (data_type) {
+    case DINT8:
+    case DUINT8:
+      return 1;
+    case DFP16:
+    case DINT16:
+    case DUINT16:
+      return 2;
+    case DFP32:
+    case DINT32:
+    case DUINT32:
+      return 4;
+    case DFP64:
+    case DINT64:
+    case DUINT64:
+      return 8;
+    default:
+      return 1;
+  }
+}
+
+template<> DataType dtypeof<float>() {
+  return DFP32;
+}
+template<> DataType dtypeof<double>() {
+  return DFP64;
+}
+template<> DataType dtypeof<int8_t>() {
+  return DINT8;
+}
+template<> DataType dtypeof<int16_t>() {
+  return DINT16;
+}
+template<> DataType dtypeof<int32_t>() {
+  return DINT32;
+}
+template<> DataType dtypeof<int64_t>() {
+  return DINT64;
+}
+template<> DataType dtypeof<uint8_t>() {
+  return DUINT8;
+}
+template<> DataType dtypeof<uint16_t>() {
+  return DUINT16;
+}
+template<> DataType dtypeof<uint32_t>() {
+  return DUINT32;
+}
+template<> DataType dtypeof<uint64_t>() {
+  return DUINT64;
+}
 
 // Make sure each thread can have different values.
 static boost::thread_specific_ptr<Caffe> thread_instance_;
@@ -76,7 +135,11 @@ void GlobalInit(int* pargc, char*** pargv) {
   // Google logging.
   ::google::InitGoogleLogging(*(pargv)[0]);
   // Provide a backtrace on segfault.
+
+  // Windows port of glogs doesn't have this function built
+#if !defined(_MSC_VER)
   ::google::InstallFailureSignalHandler();
+#endif
 }
 
 
@@ -117,12 +180,10 @@ Caffe::Caffe(const Caffe &obj)
       mode_(Caffe::CPU),
       cpu_device_(new device(-1, -1, Backend::BACKEND_CPU)),
       default_device_(cpu_device_.get()),
-      solver_count_(1),
-      root_solver_(true) {
+      solver_count_(1) {
   mode_ = obj.mode_;
   default_device_ = obj.default_device_;
   cpu_device_ = obj.cpu_device_;
-  root_solver_ = obj.root_solver_;
   solver_count_ = obj.solver_count_;
 }
 
@@ -184,8 +245,7 @@ Caffe::Caffe() : random_generator_(),
                  mode_(Caffe::CPU),
                  cpu_device_(new device(-1, -1, Backend::BACKEND_CPU)),
                  default_device_(cpu_device_.get()),
-                 solver_count_(1),
-                 root_solver_(true) {}
+                 solver_count_(1), solver_rank_(0), multiprocess_(false) { }
 
 Caffe::~Caffe() {}
 
@@ -257,7 +317,7 @@ Caffe::Caffe()
       mode_(Caffe::CPU),
       cpu_device_(new device(-1, -1, Backend::BACKEND_CPU)),
       default_device_(cpu_device_.get()),
-      solver_count_(1), root_solver_(true) {
+    solver_count_(1), solver_rank_(0), multiprocess_(false) {
 }
 
 Caffe::~Caffe() {

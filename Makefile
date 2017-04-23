@@ -43,7 +43,7 @@ LIB_BUILD_DIR := $(BUILD_DIR)/lib
 STATIC_NAME := $(LIB_BUILD_DIR)/lib$(LIBRARY_NAME).a
 DYNAMIC_VERSION_MAJOR 		:= 1
 DYNAMIC_VERSION_MINOR 		:= 0
-DYNAMIC_VERSION_REVISION 	:= 0-rc3
+DYNAMIC_VERSION_REVISION 	:= 0
 DYNAMIC_NAME_SHORT := lib$(LIBRARY_NAME).so
 #DYNAMIC_SONAME_SHORT := $(DYNAMIC_NAME_SHORT).$(DYNAMIC_VERSION_MAJOR)
 DYNAMIC_VERSIONED_NAME_SHORT := $(DYNAMIC_NAME_SHORT).$(DYNAMIC_VERSION_MAJOR).$(DYNAMIC_VERSION_MINOR).$(DYNAMIC_VERSION_REVISION)
@@ -189,11 +189,13 @@ ifeq ($(USE_CUDA), 1)
 	LIBRARIES := cudart cublas curand nvrtc cuda
 endif
 
-LIBRARIES += glog gflags protobuf boost_system boost_filesystem m hdf5_hl hdf5
+LIBRARIES += glog gflags protobuf boost_system boost_filesystem m
 
 # handle IO dependencies
 USE_LEVELDB ?= 1
 USE_LMDB ?= 1
+# This code is taken from https://github.com/sh1r0/caffe-android-lib
+USE_HDF5 ?= 1
 USE_OPENCV ?= 1
 
 ifeq ($(USE_LEVELDB), 1)
@@ -202,13 +204,17 @@ endif
 ifeq ($(USE_LMDB), 1)
 	LIBRARIES += lmdb
 endif
+# This code is taken from https://github.com/sh1r0/caffe-android-lib
+ifeq ($(USE_HDF5), 1)
+	LIBRARIES += hdf5_hl hdf5
+endif
 ifeq ($(USE_OPENCV), 1)
-	LIBRARIES += opencv_core opencv_highgui opencv_imgproc 
+	LIBRARIES += opencv_core opencv_highgui opencv_imgproc
 
 	ifeq ($(OPENCV_VERSION), 3)
 		LIBRARIES += opencv_imgcodecs
 	endif
-		
+
 endif
 PYTHON_LIBRARIES ?= boost_python python2.7
 WARNINGS := -Wall -Wno-sign-compare
@@ -282,7 +288,7 @@ endif
 # Current Xcode does not officially support openmp
 ifeq ($(OSX), 1)
 	CXX := /usr/bin/clang++
-	ifneq ($(USE_CUDA), 1)
+	ifeq ($(USE_CUDA), 1)
 		CUDA_VERSION := $(shell $(CUDA_DIR)/bin/nvcc -V | grep -o 'release [0-9.]*' | tr -d '[a-z ]')
 		ifeq ($(shell echo | awk '{exit $(CUDA_VERSION) < 7.0;}'), 1)
 			CXXFLAGS += -stdlib=libstdc++
@@ -331,6 +337,10 @@ endif
 
 ifeq ($(USE_INDEX_64),1)
 	COMMON_FLAGS += -DUSE_INDEX_64
+endif
+
+ifeq ($(DISABLE_DEVICE_HOST_UNIFIED_MEMORY),1)
+	COMMON_FLAGS += -DDISABLE_DEVICE_HOST_UNIFIED_MEMORY
 endif
 
 ifeq ($(USE_GREENTEA),1)
@@ -444,6 +454,12 @@ ifeq ($(USE_CUDNN), 1)
 	COMMON_FLAGS += -DUSE_CUDNN
 endif
 
+# NCCL acceleration configuration
+ifeq ($(USE_NCCL), 1)
+	LIBRARIES += nccl
+	COMMON_FLAGS += -DUSE_NCCL
+endif
+
 # configure IO libraries
 ifeq ($(USE_OPENCV), 1)
 	COMMON_FLAGS += -DUSE_OPENCV
@@ -456,6 +472,10 @@ ifeq ($(USE_LMDB), 1)
 ifeq ($(ALLOW_LMDB_NOLOCK), 1)
 	COMMON_FLAGS += -DALLOW_LMDB_NOLOCK
 endif
+endif
+# This code is taken from https://github.com/sh1r0/caffe-android-lib
+ifeq ($(USE_HDF5), 1)
+	COMMON_FLAGS += -DUSE_HDF5
 endif
 
 # CPU-only configuration
@@ -498,8 +518,11 @@ else
 		LIBRARIES += cblas
 		# 10.10 has accelerate while 10.9 has veclib
 		XCODE_CLT_VER := $(shell pkgutil --pkg-info=com.apple.pkg.CLTools_Executables | grep 'version' | sed 's/[^0-9]*\([0-9]\).*/\1/')
+		XCODE_CLT_GEQ_7 := $(shell [ $(XCODE_CLT_VER) -gt 6 ] && echo 1)
 		XCODE_CLT_GEQ_6 := $(shell [ $(XCODE_CLT_VER) -gt 5 ] && echo 1)
-		ifeq ($(XCODE_CLT_GEQ_6), 1)
+		ifeq ($(XCODE_CLT_GEQ_7), 1)
+			BLAS_INCLUDE ?= /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/$(shell ls /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/ | sort | tail -1)/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/Headers
+		else ifeq ($(XCODE_CLT_GEQ_6), 1)
 			BLAS_INCLUDE ?= /System/Library/Frameworks/Accelerate.framework/Versions/Current/Frameworks/vecLib.framework/Headers/
 			LDFLAGS += -framework Accelerate
 		else

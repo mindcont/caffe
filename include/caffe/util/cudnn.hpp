@@ -20,6 +20,7 @@
       << cudnnGetErrorString(status); \
   } while (0)
 
+#if !defined (_MSC_VER)
 inline const char* cudnnGetErrorString(cudnnStatus_t status) {
   switch (status) {
     case CUDNN_STATUS_SUCCESS:
@@ -44,9 +45,14 @@ inline const char* cudnnGetErrorString(cudnnStatus_t status) {
       return "CUDNN_STATUS_NOT_SUPPORTED";
     case CUDNN_STATUS_LICENSE_ERROR:
       return "CUDNN_STATUS_LICENSE_ERROR";
+#if CUDNN_VERSION_MIN(6, 0, 0)
+    case CUDNN_STATUS_RUNTIME_PREREQUISITE_MISSING:
+      return "CUDNN_STATUS_RUNTIME_PREREQUISITE_MISSING";
+#endif
   }
   return "Unknown cudnn status";
 }
+#endif
 
 namespace caffe {
 

@@ -32,7 +32,10 @@ __kernel void TEMPLATE(max_pool_forward_nd, Dtype)(const int_tp n,
       d_idx[i] = num % pooled_size[i];
       d_start[i] = d_idx[i] * stride[i] - pad[i];
       d_end[i] = min(d_start[i] + ext_kernel_size[i], size[i]);
-      d_start[i] = max(d_start[i], (int_tp)0);
+      while (d_start[i] < 0) {
+        d_start[i] += dilation[i];
+      }
+
       num /= pooled_size[i];
       offset *= size[i];
       d_iter[i] = d_start[i];
@@ -62,16 +65,16 @@ __kernel void TEMPLATE(max_pool_forward_nd, Dtype)(const int_tp n,
 
     bool incremented;
     do {
-      final_offset = offset;
+      final_offset = 0;
       int_tp size_prod = 1;
       for (i = num_axes - 1; i >= 0; --i) {
         final_offset += d_iter[i] * size_prod;
         size_prod *= size[i];
       }
 
-      if (bottom_data[final_offset] > maxval) {
+      if (bottom_data[final_offset + offset] > maxval) {
         maxidx = final_offset;
-        maxval = bottom_data[maxidx];
+        maxval = bottom_data[offset + final_offset];
       }
 
       incremented = false;
@@ -122,38 +125,36 @@ __kernel void TEMPLATE(max_pool_backward_nd, Dtype)(const int_tp n,
     // find out the local offset
     int_tp offset = 1;
     int_tp num = index;
+
+    bool do_continue = false;
+
     for (i = num_axes - 1; i >= 0; --i) {
       d_idx[i] = num % size[i];
-      if (dilation[i] > 1) {
-        d_start[i] =
-            (d_idx[i] < ext_kernel_size[i]) ?
-                d_idx[i] % dilation[i] : (d_idx[i] - ext_kernel_size[i]) + 1;
-        d_end[i] =
-            (d_idx[i] >= pooled_size[i]) ?
-                (pooled_size[i] - 1)
-                    - (pooled_size[i] - 1 - d_start[i]) % dilation[i] :
-                d_idx[i];
-      } else {
-        d_start[i] =
-            (d_idx[i] + pad[i] < kernel_size[i]) ?
-                0 : (d_idx[i] + pad[i] - kernel_size[i]) / stride[i] + 1;
-        d_end[i] = min((int_tp) ((d_idx[i] + pad[i]) / stride[i] + 1),
-                       (int_tp) (pooled_size[i]));
-      }
+      d_start[i] =
+          (d_idx[i] + pad[i] < ext_kernel_size[i]) ?
+              0 : (d_idx[i] + pad[i] - ext_kernel_size[i]) / stride[i] + 1;
+      d_end[i] = min((int_tp) ((d_idx[i] + pad[i]) / stride[i]),
+                     (int_tp) (pooled_size[i] - 1));
       num /= size[i];
       offset *= pooled_size[i];
       d_iter[i] = d_start[i];
 
       if (d_start[i] > d_end[i]) {
         bottom_diff[index] = 0;
-        return;
+        do_continue = true;
       }
     }
+
+    if (do_continue) {
+      continue;
+    }
+
+
     int_tp chan = num % channels;
     num /= channels;
     offset *= (num * channels + chan);
 
-    Dtype gradient = 0;
+    Dtype gradient = 0.0;
     int_tp final_offset = 0;
     int_tp im_offset = 0;
 
@@ -182,10 +183,10 @@ __kernel void TEMPLATE(max_pool_backward_nd, Dtype)(const int_tp n,
 
       incremented = false;
       for (i = num_axes - 1; i >= 0; --i) {
-        if (d_iter[i] > d_end[i] - dilation[i]) {
+        if (d_iter[i] >= d_end[i]) {
           d_iter[i] = d_start[i];
         } else {
-          d_iter[i] += dilation[i];
+          ++d_iter[i];
           incremented = true;
           break;
         }

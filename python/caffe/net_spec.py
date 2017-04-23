@@ -121,6 +121,10 @@ class Function(object):
     def __init__(self, type_name, inputs, params):
         self.name = None
         self.type_name = type_name
+        for index, input in enumerate(inputs):
+            if not isinstance(input, Top):
+                raise TypeError('%s input %d is not a Top (type is %s)' %
+                                (type_name, index, type(input)))
         self.inputs = inputs
         self.params = params
         self.ntop = self.params.get('ntop', 1)
@@ -231,9 +235,13 @@ class NetSpec(object):
                         subtop._to_proto(layers, names, autonames)
                         first = subtop
                     else:
-                        names[subtop.fn] = names[first.fn]
-                        for firsttop, nexttop in zip(first.fn.tops, subtop.fn.tops):
-                            names[nexttop] = names[firsttop]
+                        names[subtop] = names[first]
+                        if (isinstance(first, Top)):
+                            for firsttop, nexttop in zip(first.fn.tops, subtop.fn.tops):
+                                names[nexttop] = names[firsttop]
+                        elif (isinstance(first, Function)):
+                            for firsttop, nexttop in zip(first.tops, subtop.tops):
+                                names[nexttop] = names[firsttop]
                         subtop._to_proto(layers, names, autonames)
             else:
                 top._to_proto(layers, names, autonames)

@@ -17,7 +17,7 @@
 // Comparative check difference limit
 #define kappa 0.05
 // Comparative check shape size limit
-#define element_limit 10000000
+#define element_limit 1000000
 
 
 namespace caffe {
@@ -600,9 +600,9 @@ TYPED_TEST(LibDNNConvolutionNDLayerTest, TestBackward) {
 
 
 template<typename TypeParam>
-class LibDNNComparativeTest : public GPUDeviceTest<TypeParam> {
+class LibDNNComparativeConvTest : public GPUDeviceTest<TypeParam> {
  protected:
-  LibDNNComparativeTest()
+  LibDNNComparativeConvTest()
       : blob_bottom_(new Blob<TypeParam>()),
         blob_bottom_ref_(new Blob<TypeParam>()),
         blob_top_(new Blob<TypeParam>()),
@@ -611,14 +611,13 @@ class LibDNNComparativeTest : public GPUDeviceTest<TypeParam> {
   }
 
   virtual void SetUp() {
-    // fill the values
     blob_bottom_vec_.push_back(blob_bottom_);
     blob_bottom_vec_ref_.push_back(blob_bottom_ref_);
     blob_top_vec_.push_back(blob_top_);
     blob_top_vec_ref_.push_back(blob_top_ref_);
   }
 
-  virtual ~LibDNNComparativeTest() {
+  virtual ~LibDNNComparativeConvTest() {
     delete blob_bottom_;
     delete blob_bottom_ref_;
     delete blob_top_;
@@ -1079,9 +1078,9 @@ class LibDNNComparativeTest : public GPUDeviceTest<TypeParam> {
   std::mt19937 rng_;
 };
 
-TYPED_TEST_CASE(LibDNNComparativeTest, TestDtypes);
+TYPED_TEST_CASE(LibDNNComparativeConvTest, TestDtypes);
 
-TYPED_TEST(LibDNNComparativeTest, TestForward) {
+TYPED_TEST(LibDNNComparativeConvTest, TestForward) {
   for (int i = 0; i < 100; ++i) {
     if (this->TestForward(i)) {
       break;
@@ -1089,7 +1088,7 @@ TYPED_TEST(LibDNNComparativeTest, TestForward) {
   }
 }
 
-TYPED_TEST(LibDNNComparativeTest, TestBackward) {
+TYPED_TEST(LibDNNComparativeConvTest, TestBackward) {
   for (int i = 0; i < 100; ++i) {
     if (this->TestBackward(i)) {
       break;

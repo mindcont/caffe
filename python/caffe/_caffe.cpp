@@ -1,5 +1,3 @@
-#include <Python.h>  // NOLINT(build/include_alpha)
-
 // Produce deprecation warnings (needs to come before arrayobject.h inclusion).
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 
@@ -41,6 +39,44 @@
   } \
 } while (0)
 
+#if defined(_MSC_VER) && (_MSC_FULL_VER >= 190024210)
+// Workaround for VS 2015 Update 3 which breaks boost python
+// See: http://stackoverflow.com/questions/38261530/unresolved-external-symbols-since-visual-studio-2015-update-3-boost-python-link
+// and https://msdn.microsoft.com/vs-knownissues/vs2015-update3
+#define BP_GET_POINTER(cls) \
+namespace boost { \
+template <> \
+const volatile caffe::cls * \
+get_pointer(const volatile caffe::cls *c) { \
+    return c; \
+} \
+}
+
+#define BP_GET_POINTER_T(cls, dtype) BP_GET_POINTER(cls<dtype>)
+
+// forward declare the NCCL class
+// in case we are not using NCCL
+namespace caffe {
+template <typename Dtype> class NCCL;
+}
+
+BP_GET_POINTER_T(Net, float);
+BP_GET_POINTER_T(Layer, float);
+BP_GET_POINTER_T(Solver, float);
+BP_GET_POINTER_T(SGDSolver, float);
+BP_GET_POINTER_T(NesterovSolver, float);
+BP_GET_POINTER_T(AdaGradSolver, float);
+BP_GET_POINTER_T(RMSPropSolver, float);
+BP_GET_POINTER_T(AdaDeltaSolver, float);
+BP_GET_POINTER_T(AdamSolver, float);
+BP_GET_POINTER_T(NCCL, float);
+BP_GET_POINTER(Timer);
+BP_GET_POINTER(LayerParameter);
+BP_GET_POINTER(NetParameter);
+BP_GET_POINTER(NetState);
+
+#endif
+
 namespace bp = boost::python;
 
 namespace caffe {
@@ -59,6 +95,32 @@ void set_devices(bp::tuple args) {
     devices[i] = bp::extract<int>(args[i]);
   }
   Caffe::SetDevices(devices);
+}
+
+
+void InitLog() {
+  ::google::InitGoogleLogging("");
+#ifndef _MSC_VER
+  // this symbol is undefined on windows
+  ::google::InstallFailureSignalHandler();
+#endif  // _MSC_VER
+}
+
+void InitLogLevel(int level) {
+  FLAGS_minloglevel = level;
+  InitLog();
+}
+
+#ifndef _MSC_VER
+void InitLogLevelPipe(int level, bool stderr) {
+  FLAGS_minloglevel = level;
+  FLAGS_logtostderr = stderr;
+  InitLog();
+}
+#endif  // _MSC_VER
+
+void Log(const string& s) {
+  LOG(INFO) << s;
 }
 
 void set_random_seed(unsigned int seed) { Caffe::set_random_seed(seed,
@@ -104,12 +166,12 @@ void CheckContiguousArray(PyArrayObject* arr, string name,
 
 // Net constructor
 shared_ptr<Net<Dtype> > Net_Init(string network_file, int phase,
-    const int level, const bp::object& stages,
+    int level, const bp::object& stages,
     const bp::object& weights) {
   CheckFile(network_file);
 
   // Convert stages from list to vector
-  vector<string> stages_vector;
+  std::vector<std::string> stages_vector;
   if (!stages.is_none()) {
     for (int i = 0; i < len(stages); i++) {
       stages_vector.push_back(bp::extract<string>(stages[i]));
@@ -133,7 +195,8 @@ shared_ptr<Net<Dtype> > Net_Init(string network_file, int phase,
 
 // Legacy Net construct-and-load convenience constructor
 shared_ptr<Net<Dtype> > Net_Init_Load(
-    string param_file, string pretrained_param_file, int phase) {
+    string param_file, string pretrained_param_file, int phase,
+    int level, const bp::object& stages) {
   LOG(WARNING) << "DEPRECATION WARNING - deprecated use of Python interface";
   LOG(WARNING) << "Use this instead (with the named \"weights\""
     << " parameter):";
@@ -142,8 +205,17 @@ shared_ptr<Net<Dtype> > Net_Init_Load(
   CheckFile(param_file);
   CheckFile(pretrained_param_file);
 
+  // Convert stages from list to vector
+  std::vector<std::string> stages_vector;
+  if (!stages.is_none()) {
+    for (int i = 0; i < len(stages); i++) {
+      stages_vector.push_back(bp::extract<string>(stages[i]));
+    }
+  }
+
   shared_ptr<Net<Dtype> > net(new Net<Dtype>(param_file,
-      static_cast<Phase>(phase), Caffe::GetDefaultDevice()));
+      static_cast<Phase>(phase), Caffe::GetDefaultDevice(),
+      level, &stages_vector));
   net->CopyTrainedLayersFrom(pretrained_param_file);
   return net;
 }
@@ -201,22 +273,29 @@ void Net_SetLayerInputArrays(Net<Dtype>* net, Layer<Dtype>* layer,
   // check that we were passed appropriately-sized contiguous memory
   PyArrayObject* data_arr =
       reinterpret_cast<PyArrayObject*>(data_obj.ptr());
-  PyArrayObject* labels_arr =
-      reinterpret_cast<PyArrayObject*>(labels_obj.ptr());
   CheckContiguousArray(data_arr, "data array", md_layer->shape());
-  CheckContiguousArray(labels_arr, "labels array", md_layer->label_shape());
-  if (PyArray_DIMS(data_arr)[0] != PyArray_DIMS(labels_arr)[0]) {
-    throw std::runtime_error("data and labels must have the same first"
-        " dimension");
-  }
   if (PyArray_DIMS(data_arr)[0] % md_layer->batch_size() != 0) {
     throw std::runtime_error("first dimensions of input arrays must be a"
         " multiple of batch size");
   }
 
-  md_layer->Reset(static_cast<Dtype*>(PyArray_DATA(data_arr)),
-      static_cast<Dtype*>(PyArray_DATA(labels_arr)),
-      PyArray_DIMS(data_arr)[0]);
+  PyArrayObject* labels_arr = nullptr;
+
+  if (labels_obj.ptr() != bp::object().ptr()) {
+    labels_arr = reinterpret_cast<PyArrayObject*>(labels_obj.ptr());
+    CheckContiguousArray(labels_arr, "labels array", md_layer->label_shape());
+    if (PyArray_DIMS(data_arr)[0] != PyArray_DIMS(labels_arr)[0]) {
+      throw std::runtime_error("data and labels must have the same first"
+          " dimension");
+    }
+    md_layer->Reset(static_cast<Dtype*>(PyArray_DATA(data_arr)),
+        static_cast<Dtype*>(PyArray_DATA(labels_arr)),
+        PyArray_DIMS(data_arr)[0]);
+  } else {
+    md_layer->Reset(static_cast<Dtype*>(PyArray_DATA(data_arr)),
+        nullptr,
+        PyArray_DIMS(data_arr)[0]);
+  }
 }
 
 
@@ -258,9 +337,15 @@ struct NdarrayCallPolicies : public bp::default_call_policies {
     void* data = PyArray_DATA(reinterpret_cast<PyArrayObject*>(result));
     Py_DECREF(result);
     const int_tp num_axes = blob->num_axes();
+#ifdef USE_INDEX64
     vector<npy_long> dims(blob->shape().begin(), blob->shape().end());
     PyObject *arr_obj = PyArray_SimpleNewFromData(num_axes, dims.data(),
                                                   NPY_FLOAT32, data);
+#else
+    vector<npy_intp> dims(blob->shape().begin(), blob->shape().end());
+    PyObject *arr_obj = PyArray_SimpleNewFromData(num_axes, dims.data(),
+                                                  NPY_FLOAT32, data);
+#endif
     // SetBaseObject steals a ref, so we need to INCREF.
     Py_INCREF(pyblob.ptr());
     PyArray_SetBaseObject(reinterpret_cast<PyArrayObject*>(arr_obj),
@@ -336,12 +421,12 @@ void Solve_NoGIL(Solver<Dtype>& solver, const char* resume_file) {
 
 
 template<typename Dtype>
-class PythonCallback: public Solver<Dtype>::Callback {
+class SolverCallback: public Solver<Dtype>::Callback {
  protected:
   bp::object on_start_, on_gradients_ready_;
 
  public:
-  PythonCallback(bp::object on_start, bp::object on_gradients_ready)
+  SolverCallback(bp::object on_start, bp::object on_gradients_ready)
     : on_start_(on_start), on_gradients_ready_(on_gradients_ready) { }
   virtual void on_gradients_ready() {
     on_gradients_ready_();
@@ -353,8 +438,93 @@ class PythonCallback: public Solver<Dtype>::Callback {
 template<typename Dtype>
 void Solver_add_callback(Solver<Dtype> * solver, bp::object on_start,
   bp::object on_gradients_ready) {
-  solver->add_callback(new PythonCallback<Dtype>(on_start, on_gradients_ready));
+  solver->add_callback(new SolverCallback<Dtype>(on_start, on_gradients_ready));
 }
+
+// Seems boost cannot call the base method directly
+void Solver_add_nccl(Solver<Dtype>* solver
+#ifdef USE_NCCL
+  , NCCL<Dtype>* nccl
+#endif
+) {
+#ifdef USE_NCCL
+  solver->add_callback(nccl);
+#endif
+}
+
+void share_weights(Solver<Dtype>* solver, Net<Dtype>* net) {
+  net->ShareTrainedLayersWith(solver->net().get());
+}
+
+template<typename Dtype>
+class NetCallback: public Net<Dtype>::Callback {
+ public:
+  explicit NetCallback(bp::object run) : run_(run) {}
+
+ protected:
+  virtual void run(int layer) {
+    run_(layer);
+  }
+  bp::object run_;
+};
+void Net_before_forward(Net<Dtype>* net, bp::object run) {
+  net->add_before_forward(new NetCallback<Dtype>(run));
+}
+void Net_after_forward(Net<Dtype>* net, bp::object run) {
+  net->add_after_forward(new NetCallback<Dtype>(run));
+}
+void Net_before_backward(Net<Dtype>* net, bp::object run) {
+  net->add_before_backward(new NetCallback<Dtype>(run));
+}
+void Net_after_backward(Net<Dtype>* net, bp::object run) {
+  net->add_after_backward(new NetCallback<Dtype>(run));
+}
+
+void Net_add_nccl(Net<Dtype>* net
+#ifdef USE_NCCL
+  , NCCL<Dtype>* nccl
+#endif
+) {
+#ifdef USE_NCCL
+  net->add_after_backward(nccl);
+#endif
+}
+#ifndef USE_NCCL
+template<typename Dtype>
+class NCCL {
+ public:
+  NCCL(shared_ptr<Solver<Dtype> > solver, const string& uid) {}
+};
+#endif
+
+bool HasNCCL() {
+#ifdef USE_NCCL
+  return true;
+#else
+  return false;
+#endif
+}
+
+#ifdef USE_NCCL
+bp::object NCCL_New_Uid() {
+  std::string uid = NCCL<Dtype>::new_uid();
+#if PY_MAJOR_VERSION >= 3
+  // Convert std::string to bytes so that Python does not
+  // try to decode the string using the current locale.
+
+  // Since boost 1.53 boost.python will convert str and bytes
+  // to std::string but will convert std::string to str. Here we
+  // force a bytes object to be returned. When this object
+  // is passed back to the NCCL constructor boost.python will
+  // correctly convert the bytes to std::string automatically
+  PyObject* py_uid = PyBytes_FromString(uid.c_str());
+  return bp::object(bp::handle<>(py_uid));
+#else
+  // automatic conversion is correct for python 2.
+  return bp::object(uid);
+#endif
+}
+#endif
 
 BOOST_PYTHON_MEMBER_FUNCTION_OVERLOADS(SolveOverloads, Solve, 0, 1);
 
@@ -367,6 +537,13 @@ BOOST_PYTHON_MODULE(_caffe) {
   bp::scope().attr("__version__") = AS_STRING(CAFFE_VERSION);
 
   // Caffe utility functions
+  bp::def("init_log", &InitLog);
+  bp::def("init_log", &InitLogLevel);
+  #ifndef _MSC_VER
+  bp::def("init_log", &InitLogLevelPipe);
+  #endif  // _MSC_VER
+  bp::def("log", &Log);
+  bp::def("has_nccl", &HasNCCL);
   bp::def("set_mode_cpu", &set_mode_cpu);
   bp::def("set_mode_gpu", &set_mode_gpu);
   bp::def("set_random_seed", &set_random_seed);
@@ -374,7 +551,11 @@ BOOST_PYTHON_MODULE(_caffe) {
   bp::def("set_devices", &set_devices);
   bp::def("select_device", &select_device);
   bp::def("enumerate_devices", &Caffe::EnumerateDevices);
-
+  bp::def("solver_count", &Caffe::solver_count);
+  bp::def("set_solver_count", &Caffe::set_solver_count);
+  bp::def("solver_rank", &Caffe::solver_rank);
+  bp::def("set_solver_rank", &Caffe::set_solver_rank);
+  bp::def("set_multiprocess", &Caffe::set_multiprocess);
   bp::def("layer_type_list", &LayerRegistry<Dtype>::LayerTypeList);
 
   bp::class_<Net<Dtype>, shared_ptr<Net<Dtype> >, boost::noncopyable >("Net",
@@ -385,7 +566,10 @@ BOOST_PYTHON_MODULE(_caffe) {
             bp::arg("level")=0, bp::arg("stages")=bp::object(),
             bp::arg("weights")=bp::object())))
     // Legacy constructor
-    .def("__init__", bp::make_constructor(&Net_Init_Load))
+    .def("__init__", bp::make_constructor(&Net_Init_Load,
+         bp::default_call_policies(), (bp::arg("network_file"),
+            bp::arg("pretrained_param_file"), "phase",
+            bp::arg("level")=0, bp::arg("stages")=bp::object())))
     .def("_forward", &ForwardFromTo_NoGIL)
     .def("_backward", &BackwardFromTo_NoGIL)
     .def("reshape", &Net<Dtype>::Reshape)
@@ -421,7 +605,12 @@ BOOST_PYTHON_MODULE(_caffe) {
         bp::with_custodian_and_ward<1, 4> > ())
     .def("save", &Net_Save)
     .def("save_hdf5", &Net_SaveHDF5)
-    .def("load_hdf5", &Net_LoadHDF5);
+    .def("load_hdf5", &Net_LoadHDF5)
+    .def("before_forward", &Net_before_forward)
+    .def("after_forward", &Net_after_forward)
+    .def("before_backward", &Net_before_backward)
+    .def("after_backward", &Net_after_backward)
+    .def("after_backward", &Net_add_nccl);
   BP_REGISTER_SHARED_PTR_TO_PYTHON(Net<Dtype>);
 
   bp::class_<Blob<Dtype>, shared_ptr<Blob<Dtype> >, boost::noncopyable>(
@@ -450,10 +639,31 @@ BOOST_PYTHON_MODULE(_caffe) {
           bp::return_internal_reference<>()))
     .def("setup", &Layer<Dtype>::LayerSetUp)
     .def("reshape", &Layer<Dtype>::Reshape)
-    .add_property("type", bp::make_function(&Layer<Dtype>::type));
+    .add_property("type", bp::make_function(&Layer<Dtype>::type))
+    .add_property("layer_param", bp::make_function(&Layer<Dtype>::layer_param,
+          bp::return_internal_reference<>()));
   BP_REGISTER_SHARED_PTR_TO_PYTHON(Layer<Dtype>);
 
-  bp::class_<LayerParameter>("LayerParameter", bp::no_init);
+  bp::class_<LayerParameter>("LayerParameter", bp::no_init)
+    .add_property("name",          bp::make_function(
+                          static_cast<const string& (LayerParameter::*)
+                          (void) const>(&LayerParameter::name),
+                          bp::return_value_policy<bp::return_by_value>()))
+    .add_property("bottom_size",   &LayerParameter::bottom_size)
+    .def("get_bottom",    bp::make_function(
+                          static_cast<const string& (LayerParameter::*)
+                          (int) const>(&LayerParameter::bottom),  // NOLINT
+                          bp::return_value_policy<bp::return_by_value>()))
+    .add_property("top_size",      &LayerParameter::top_size)
+    .def("get_top",       bp::make_function(
+                          static_cast<const string& (LayerParameter::*)
+                          (int) const>(&LayerParameter::top),     // NOLINT
+                          bp::return_value_policy<bp::return_by_value>()));
+
+  bp::class_<SolverParameter>("SolverParameter", bp::no_init)
+    .add_property("max_iter", &SolverParameter::max_iter)
+    .add_property("display", &SolverParameter::display)
+    .add_property("layer_wise_reduce", &SolverParameter::layer_wise_reduce);
 
   bp::class_<Solver<Dtype>, shared_ptr<Solver<Dtype> >, boost::noncopyable>(
     "Solver", bp::no_init)
@@ -467,9 +677,41 @@ BOOST_PYTHON_MODULE(_caffe) {
     .def("step", &Step_NoGIL)
     .def("solve", &Solve_NoGIL)
     .def("add_callback", &Solver_add_callback<Dtype>)
+    .def("add_callback", &Solver_add_nccl)
+    .def("solve", static_cast<void (Solver<Dtype>::*)(const char*)>(
+          &Solver<Dtype>::Solve), SolveOverloads())
+    .def("step", &Solver<Dtype>::Step)
     .def("restore", &Solver<Dtype>::Restore)
-    .def("snapshot", &Solver<Dtype>::Snapshot);
+    .def("snapshot", &Solver<Dtype>::Snapshot)
+    .def("share_weights", &share_weights)
+    .add_property("param", bp::make_function(&Solver<Dtype>::param,
+              bp::return_value_policy<bp::copy_const_reference>()));
   BP_REGISTER_SHARED_PTR_TO_PYTHON(Solver<Dtype>);
+
+  bp::class_<NetState>("NetState", bp::init<>())
+    .add_property("phase", &NetState::phase,
+                           &NetState::set_phase)
+    .add_property("level", &NetState::level,
+                           &NetState::set_level)
+    .def("stage_size",     &NetState::stage_size)
+    .def("get_stage",      bp::make_function(
+                           static_cast<const string& (NetState::*)
+                           (int) const>(&NetState::stage),  // NOLINT
+                           bp::return_value_policy<bp::return_by_value>()))
+    .def("add_stage",      static_cast<void (NetState::*)   // NOLINT
+                           (const string&)>(&NetState::add_stage))
+    .def("set_stage",      static_cast<void (NetState::*)   // NOLINT
+                           (int, const string&)>(&NetState::set_stage))
+    .def("clear_stage",    &NetState::clear_stage);
+
+  bp::class_<NetParameter>("NetParameter", bp::init<>())
+    .add_property("force_backward", &NetParameter::force_backward,
+                                    &NetParameter::set_force_backward)
+    .add_property("state",
+                     bp::make_function(&NetParameter::state,
+                     bp::return_value_policy<bp::copy_const_reference>()),
+                     static_cast<void (NetParameter::*)(NetState*)>(
+                             &NetParameter::set_allocated_state));
 
 
   bp::class_<SolverParameter>("SolverParameter", bp::init<>())
@@ -511,25 +753,35 @@ BOOST_PYTHON_MODULE(_caffe) {
     .add_property("snapshot_format", &SolverParameter::snapshot_format,
                                      &SolverParameter::set_snapshot_format)
     .add_property("snapshot_prefix",
-                       bp::make_function(&SolverParameter::snapshot_prefix,
-                       bp::return_value_policy<bp::copy_const_reference>()),
-                       static_cast<void (SolverParameter::*)(const string&)>(
-                               &SolverParameter::set_snapshot_prefix))
+                   bp::make_function(&SolverParameter::snapshot_prefix,
+                   bp::return_value_policy<bp::copy_const_reference>()),
+                   static_cast<void (SolverParameter::*)(const string&)>(
+                           &SolverParameter::set_snapshot_prefix))
     .add_property("type",
-                       bp::make_function(&SolverParameter::type,
-                       bp::return_value_policy<bp::copy_const_reference>()),
-                       static_cast<void (SolverParameter::*)(const string&)>(
-                               &SolverParameter::set_type))
+                   bp::make_function(&SolverParameter::type,
+                   bp::return_value_policy<bp::copy_const_reference>()),
+                   static_cast<void (SolverParameter::*)(const string&)>(
+                           &SolverParameter::set_type))
     .add_property("net",
-                       bp::make_function(&SolverParameter::net,
-                       bp::return_value_policy<bp::copy_const_reference>()),
-                       static_cast<void (SolverParameter::*)(const string&)>(
-                               &SolverParameter::set_net))
+                   bp::make_function(&SolverParameter::net,
+                   bp::return_value_policy<bp::copy_const_reference>()),
+                   static_cast<void (SolverParameter::*)(const string&)>(
+                           &SolverParameter::set_net))
     .add_property("train_net",
-                       bp::make_function(&SolverParameter::train_net,
-                       bp::return_value_policy<bp::copy_const_reference>()),
-                       static_cast<void (SolverParameter::*)(const string&)>(
-                               &SolverParameter::set_train_net));
+                   bp::make_function(&SolverParameter::train_net,
+                   bp::return_value_policy<bp::copy_const_reference>()),
+                   static_cast<void (SolverParameter::*)(const string&)>(
+                           &SolverParameter::set_train_net))
+    .add_property("net_param",
+                   bp::make_function(&SolverParameter::mutable_net_param,
+                   bp::return_value_policy<bp::reference_existing_object>()),
+                   static_cast<void (SolverParameter::*)(NetParameter*)>(
+                           &SolverParameter::set_allocated_net_param))
+    .add_property("train_state",
+                   bp::make_function(&SolverParameter::mutable_train_state,
+                   bp::return_value_policy<bp::reference_existing_object>()),
+                   static_cast<void (SolverParameter::*)(NetState*)>(
+                           &SolverParameter::set_allocated_train_state));
 
   bp::enum_<::caffe::SolverParameter_SnapshotFormat>("snapshot_format")
       .value("HDF5", SolverParameter_SnapshotFormat_HDF5)
@@ -581,6 +833,24 @@ BOOST_PYTHON_MODULE(_caffe) {
     .def(bp::vector_indexing_suite<vector<shared_ptr<Net<Dtype> > >, true>());
   bp::class_<vector<bool> >("BoolVec")
     .def(bp::vector_indexing_suite<vector<bool> >());
+
+  bp::class_<NCCL<Dtype>, shared_ptr<NCCL<Dtype> >,
+    boost::noncopyable>("NCCL",
+                        bp::init<shared_ptr<Solver<Dtype> >, const string&>())
+#ifdef USE_NCCL
+    .def("new_uid", NCCL_New_Uid).staticmethod("new_uid")
+    .def("bcast", &NCCL<Dtype>::Broadcast)
+#endif
+    /* NOLINT_NEXT_LINE(whitespace/semicolon) */
+  ;
+  BP_REGISTER_SHARED_PTR_TO_PYTHON(NCCL<Dtype>);
+
+  bp::class_<Timer, shared_ptr<Timer>, boost::noncopyable>(
+    "Timer", bp::init<>())
+    .def("start", &Timer::Start)
+    .def("stop", &Timer::Stop)
+    .add_property("ms", &Timer::MilliSeconds);
+  BP_REGISTER_SHARED_PTR_TO_PYTHON(Timer);
 
   // boost python expects a void (missing) return value, while import_array
   // returns NULL for python3. import_array1() forces a void return value.

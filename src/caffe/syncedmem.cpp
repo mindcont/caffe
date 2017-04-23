@@ -2,7 +2,7 @@
 #include "caffe/greentea/greentea.hpp"
 #include "caffe/syncedmem.hpp"
 
-#include "../../include/caffe/device.hpp"
+#include "caffe/device.hpp"
 #include "caffe/util/math_functions.hpp"
 
 #ifdef USE_GREENTEA
@@ -10,9 +10,7 @@
 #include "caffe/greentea/greentea_math_functions.hpp"
 
 #define ZEROCOPY_SUPPORTED(device, ptr, size) \
-             (device->is_host_unified() &&\
-             ((uintptr_t)(ptr) % OPENCL_PAGE_ALIGN) == 0 &&\
-             ((size) % OPENCL_CACHE_ALIGN) == 0)
+             (device->is_host_unified())
 #endif
 
 namespace caffe {
@@ -23,40 +21,57 @@ namespace caffe {
 // but might be more significant for parallel training. Most importantly,
 // it improved stability for large models on many GPUs.
 
-void CaffeMallocHost(void** ptr, int_tp size, device* device_context) {
+void CaffeMallocHost(void** ptr, int_tp size, device* dev) {
 #ifndef CPU_ONLY
   if (Caffe::mode() == Caffe::GPU) {
-    if (device_context->backend() == BACKEND_CUDA) {
+    if (dev->backend() == BACKEND_CUDA) {
 #ifdef USE_CUDA
       CUDA_CHECK(cudaMallocHost(ptr, size));
       return;
 #endif  // USE_CUDA
     } else {
       // Make sure the memory is zero-copy usable in OpenCL
+#ifdef _MSC_VER
+      // No aligned allocation support in windows for now.
+      // Using _aligned_malloc will crash due to a bug.
+      *ptr = malloc(((size - 1)/OPENCL_CACHE_ALIGN + 1) * OPENCL_CACHE_ALIGN);
+#else
       CHECK_EQ(0, posix_memalign(ptr, OPENCL_PAGE_ALIGN,
               ((size - 1)/OPENCL_CACHE_ALIGN + 1) * OPENCL_CACHE_ALIGN))
                   << "Host memory allocation error of size: "
                   << size << " B";
+#endif  // _MSC_VER
       return;
     }
   }
 #endif
+#ifdef USE_MKL
+  *ptr = mkl_malloc(size ? size:1, 64);
+#else
   *ptr = malloc(size);
+#endif  // USE_MKL
   CHECK(*ptr) << "host allocation of size " << size << " failed";
 }
 
-void CaffeFreeHost(void* ptr, device* device_context) {
+void CaffeFreeHost(void* ptr, device* dev) {
 #ifndef CPU_ONLY
   if (Caffe::mode() == Caffe::GPU) {
-    if (device_context->backend() == BACKEND_CUDA) {
+    if (dev->backend() == BACKEND_CUDA) {
 #ifdef USE_CUDA
       cudaFreeHost(ptr);
       return;
 #endif  // USE_CUDA
+    } else {
+      free(ptr);
+      return;
     }
   }
 #endif
+#ifdef USE_MKL
+  mkl_free(ptr);
+#else
   free(ptr);
+#endif  // USE_MKL
 }
 
 
@@ -105,10 +120,24 @@ SyncedMemory::~SyncedMemory() {
 }
 
 inline void SyncedMemory::to_cpu() {
+  check_device();
   switch (head_) {
     case UNINITIALIZED: {
       CaffeMallocHost(&cpu_ptr_, size_, device_);
-      caffe_memset(size_, 0, cpu_ptr_);
+      switch (mem_init_type_) {
+        case DFP32:
+          caffe_set<float>(size_/dtsizeof(mem_init_type_), 0.0,
+                           static_cast<float*>(cpu_ptr_));
+          break;
+        case DFP64:
+          caffe_set<double>(size_/dtsizeof(mem_init_type_), 0.0,
+                           static_cast<double*>(cpu_ptr_));
+          break;
+        case DINT32:
+        case DUINT32:
+        default:
+          caffe_memset(size_, 0, cpu_ptr_);
+      }
       head_ = HEAD_AT_CPU;
       own_cpu_data_ = true;
       break;
@@ -163,6 +192,7 @@ inline void SyncedMemory::to_cpu() {
 }
 
 inline void SyncedMemory::to_gpu() {
+  check_device();
 #ifndef CPU_ONLY
   switch (head_) {
     case UNINITIALIZED: {
@@ -170,29 +200,53 @@ inline void SyncedMemory::to_gpu() {
 #ifdef USE_CUDA
         CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
         device_->IncreaseMemoryUsage(size_);
-        caffe_gpu_memset(size_, 0, gpu_ptr_);
+        switch (mem_init_type_) {
+          case DFP32:
+            caffe_gpu_set<float>(size_/dtsizeof(mem_init_type_), 0.0,
+                             static_cast<float*>(gpu_ptr_));
+            break;
+          case DFP64:
+            caffe_gpu_set<double>(size_/dtsizeof(mem_init_type_), 0.0,
+                             static_cast<double*>(gpu_ptr_));
+            break;
+          case DINT32:
+          case DUINT32:
+          default:
+            caffe_gpu_memset(size_, 0, gpu_ptr_);
+        }
         own_gpu_data_ = true;
 #endif  // USE_CUDA
       } else {
 #ifdef USE_GREENTEA
         viennacl::ocl::context &ctx = viennacl::ocl::get_context(
             device_->id());
-        ctx.get_queue().finish();
         cl_int err;
         if (ctx.devices()[0].type() == CL_DEVICE_TYPE_CPU) {
           cl_gpu_mem_ = clCreateBuffer(ctx.handle().get(),
                      CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                      size_, nullptr, &err);
         } else if (device_->is_host_unified()) {
-            // auto saved_mode = Caffe::mode();
-            // Caffe::set_mode(Caffe::GPU);
-            CaffeMallocHost(&cpu_ptr_, size_, device_);
-            // Caffe::set_mode(saved_mode);
-            caffe_memset(size_, 0, cpu_ptr_);
+            size_t zero_copy_size = (size_ + OPENCL_CACHE_ALIGN - 1)
+                                    & ~(OPENCL_CACHE_ALIGN - 1);
+            CaffeMallocHost(&cpu_ptr_, zero_copy_size, device_);
+            switch (mem_init_type_) {
+              case DFP32:
+                caffe_set<float>(size_/dtsizeof(mem_init_type_), 0.0,
+                                 static_cast<float*>(cpu_ptr_));
+                break;
+              case DFP64:
+                caffe_set<double>(size_/dtsizeof(mem_init_type_), 0.0,
+                                 static_cast<double*>(cpu_ptr_));
+                break;
+              case DINT32:
+              case DUINT32:
+              default:
+                caffe_memset(size_, 0, cpu_ptr_);
+            }
             own_cpu_data_ = true;
             cl_gpu_mem_ = clCreateBuffer(ctx.handle().get(),
                               CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR,
-                              size_, cpu_ptr_, &err);
+                              zero_copy_size, cpu_ptr_, &err);
             void *mapped_ptr = clEnqueueMapBuffer(
                                   ctx.get_queue().handle().get(),
                                   cl_gpu_mem_,
@@ -218,11 +272,24 @@ inline void SyncedMemory::to_gpu() {
 
         device_->IncreaseMemoryUsage(size_);
         if (!own_zero_copy_data_) {
-          int_tp alpha = 0;
-          greentea_memset(device_->id(), size_, alpha, cl_gpu_mem_, 0);
+          switch (mem_init_type_) {
+            case DFP32:
+              greentea_gpu_set<float>(device_->id(),
+                                      size_/dtsizeof(mem_init_type_), 0.0,
+                                      cl_gpu_mem_, 0);
+              break;
+            case DFP64:
+              greentea_gpu_set<double>(device_->id(),
+                                       size_/dtsizeof(mem_init_type_), 0.0,
+                                       cl_gpu_mem_, 0);
+              break;
+            case DINT32:
+            case DUINT32:
+            default:
+              greentea_memset(device_->id(), size_, 0, cl_gpu_mem_, 0);
+          }
         }
         gpu_ptr_ = reinterpret_cast<void*>(cl_gpu_mem_);
-        ctx.get_queue().finish();
         own_gpu_data_ = true;
 #endif  // USE_GREENTEA
       }
@@ -243,7 +310,6 @@ inline void SyncedMemory::to_gpu() {
 #ifdef USE_GREENTEA
         viennacl::ocl::context &ctx = viennacl::ocl::get_context(
             device_->id());
-        ctx.get_queue().finish();
         if (gpu_ptr_ == nullptr) {
           cl_int err;
           if (ctx.devices()[0].type() == CL_DEVICE_TYPE_CPU) {
@@ -251,9 +317,11 @@ inline void SyncedMemory::to_gpu() {
                 ctx.handle().get(), CL_MEM_READ_WRITE | CL_MEM_ALLOC_HOST_PTR,
                 size_, nullptr, &err);
           } else if (ZEROCOPY_SUPPORTED(device_, cpu_ptr_, size_)) {
+              size_t aligned_size = ((size_ - 1)/OPENCL_CACHE_ALIGN + 1) *
+                                    OPENCL_CACHE_ALIGN;
               cl_gpu_mem_ = clCreateBuffer(ctx.handle().get(),
                                CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR,
-                               size_, cpu_ptr_, &err);
+                               aligned_size, cpu_ptr_, &err);
               void *mapped_ptr = clEnqueueMapBuffer(
                                     ctx.get_queue().handle().get(),
                                     (cl_mem) cl_gpu_mem_,
@@ -275,11 +343,12 @@ inline void SyncedMemory::to_gpu() {
                           << size_ << " failed.";
           device_->IncreaseMemoryUsage(size_);
           gpu_ptr_ = reinterpret_cast<void*>(cl_gpu_mem_);
+          // ctx.get_queue().finish();
+        }
+        if (!own_zero_copy_data_) {
+          greentea_gpu_memcpy(size_, cpu_ptr_, (cl_mem) gpu_ptr_, 0, &ctx);
           ctx.get_queue().finish();
         }
-        if (!own_zero_copy_data_)
-          greentea_gpu_memcpy(size_, cpu_ptr_, (cl_mem) gpu_ptr_, 0, &ctx);
-        ctx.get_queue().finish();
         own_gpu_data_ = true;
 #endif  // USE_GREENTEA
       }
@@ -296,11 +365,13 @@ inline void SyncedMemory::to_gpu() {
 }
 
 const void* SyncedMemory::cpu_data() {
+  check_device();
   to_cpu();
   return (const void*) cpu_ptr_;
 }
 
 void SyncedMemory::set_cpu_data(void* data) {
+  check_device();
   CHECK(data);
   if (cpu_ptr_ && own_cpu_data_) {
     CaffeFreeHost(cpu_ptr_, device_);
@@ -311,6 +382,7 @@ void SyncedMemory::set_cpu_data(void* data) {
 }
 
 const void* SyncedMemory::gpu_data() {
+  check_device();
 #ifndef CPU_ONLY
   to_gpu();
   return (const void*) gpu_ptr_;
@@ -321,16 +393,13 @@ const void* SyncedMemory::gpu_data() {
 }
 
 void SyncedMemory::set_gpu_data(void* data) {
+  check_device();
 #ifndef CPU_ONLY
   if (this->device_->backend() == BACKEND_CUDA) {
 #ifdef USE_CUDA
   CHECK(data);
   if (own_gpu_data_) {
-    int initial_device;
-    cudaGetDevice(&initial_device);
-    CUDA_CHECK(cudaSetDevice(device_->id()));
     CUDA_CHECK(cudaFree(gpu_ptr_));
-    cudaSetDevice(initial_device);
   }
   gpu_ptr_ = data;
   head_ = HEAD_AT_GPU;
@@ -347,12 +416,14 @@ void SyncedMemory::set_gpu_data(void* data) {
 }
 
 void* SyncedMemory::mutable_cpu_data() {
+  check_device();
   to_cpu();
   head_ = HEAD_AT_CPU;
   return cpu_ptr_;
 }
 
 void* SyncedMemory::mutable_gpu_data() {
+  check_device();
 #ifndef CPU_ONLY
   to_gpu();
   head_ = HEAD_AT_GPU;
@@ -367,6 +438,7 @@ void* SyncedMemory::mutable_gpu_data() {
 #ifndef CPU_ONLY
 #ifdef USE_CUDA
 void SyncedMemory::async_gpu_push(const cudaStream_t& stream) {
+  check_device();
   CHECK(head_ == HEAD_AT_CPU);
   if (gpu_ptr_ == NULL) {
     CUDA_CHECK(cudaMalloc(&gpu_ptr_, size_));
@@ -380,5 +452,19 @@ void SyncedMemory::async_gpu_push(const cudaStream_t& stream) {
 #endif  // USE_CUDA
 #endif  // !CPU_ONLY
 
+void SyncedMemory::check_device() {
+#ifndef CPU_ONLY
+#if defined(DEBUG) && defined(USE_CUDA)
+  int device;
+  cudaGetDevice(&device);
+  CHECK(device == device_);
+  if (gpu_ptr_ && own_gpu_data_) {
+    cudaPointerAttributes attributes;
+    CUDA_CHECK(cudaPointerGetAttributes(&attributes, gpu_ptr_));
+    CHECK(attributes.device == device_);
+  }
+#endif
+#endif
+}
 }  // namespace caffe
 
