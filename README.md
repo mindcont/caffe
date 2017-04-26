@@ -1,5 +1,9 @@
 # Deep Visualization Toolbox
 
+**这个分支克隆于[deep-visualization-toolbox](https://github.com/yosinski/deep-visualization-toolbox) ，仅合并了[yosinski](https://github.com/yosinski/caffe/tree/deconv-deep-vis-toolbox)所实现的caffe依赖，使之成为一个整体。**
+
+**This branch is cloned from [deep-visualization-toolbox](https://github.com/yosinski/deep-visualization-toolbox), merging only with his slightly modified [deconv-deep-vis-toolbox Caffe branch](https://github.com/yosinski/caffe/tree/deconv-deep-vis-toolbox) (supporting deconv and a few extra Python bindings), making it an integral tool.**
+
 This is the code required to run the Deep Visualization Toolbox, as well as to generate the neuron-by-neuron visualizations using regularized optimization.
 The toolbox and methods are described casually [here](http://yosinski.com/deepvis) and more formally in this paper:
 
@@ -61,9 +65,11 @@ you'll need the slightly modified [deconv-deep-vis-toolbox Caffe branch](https:/
 extra Python bindings). Getting the branch and switching to it is easy.
 Starting from your Caffe directory (that is, the directory where you've checked out Caffe, *not* the directory where you've checked out the DeepVis Toolbox), run:
 
-    $ git remote add yosinski https://github.com/yosinski/caffe.git
-    $ git fetch --all
-    $ git checkout --track -b deconv-deep-vis-toolbox yosinski/deconv-deep-vis-toolbox
+    $ git clone https://github.com/mindcont/caffe.git --recursive
+    $ git checkout deconv-vis
+    $ git submodule init
+    $ git submodule update
+    $ cd external/caffe
     $ < edit Makefile.config to suit your system if not already done in Step 0 >
     $ make clean
     $ make -j
@@ -112,7 +118,7 @@ You can put it wherever you like:
     $ git clone https://github.com/yosinski/deep-visualization-toolbox
     $ cd deep-visualization-toolbox
 
-The settings in the latest version of the toolbox (February 2016) work a bit differently than in earlier versions (April 2015). If you have the latest version (recommended!), 
+The settings in the latest version of the toolbox (February 2016) work a bit differently than in earlier versions (April 2015). If you have the latest version (recommended!),
 the minimal steps are to create a `settings_local.py` file using the template for the default `caffenet-yos` model:
 
     $ cp models/caffenet-yos/settings_local.template-caffenet-yos.py settings_local.py
@@ -161,6 +167,3 @@ If running the toolbox on a local Mac or Linux machine isn't working for you, yo
  * John Moeller has put together a [Docker container for the toolbox](https://github.com/fishcorn/dvtb-container). This should even work on Windows! (confirmation needed)
 
  * If you're desperate, it's also possible to [run the toolbox on Amazon EC2](doc/deep-vis-on-aws.md), but display will be much slower and images can be loaded only from file (not from webcam).
-
-
-
